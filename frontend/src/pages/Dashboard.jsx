@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
 import axios from 'axios'
 
-const API = import.meta.env.VITE_API_URL || 'https://jobradar-ai-production-4c8c.up.railway.app'
+const API = import.meta.env.VITE_API_URL || 'https://jobradar-ai.onrender.com'
 
 export default function Dashboard() {
   const navigate  = useNavigate()
