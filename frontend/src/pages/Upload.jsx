@@ -2,7 +2,7 @@ import { useState, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
 import axios from 'axios'
 
-const API = import.meta.env.VITE_API_URL || 'http://localhost:8000'
+const API = import.meta.env.VITE_API_URL || 'https://jobradar-ai-production-4c8c.up.railway.app'
 
 export default function Upload() {
   const [file, setFile]         = useState(null)
@@ -32,7 +32,7 @@ export default function Upload() {
       localStorage.setItem('session_id', res.data.session_id)
       localStorage.setItem('resume', JSON.stringify(res.data.resume))
       navigate('/dashboard')
-    } catch { setError('Upload failed. Ensure backend is running at localhost:8000') }
+    } catch { setError('Upload failed. Please try again in a moment.') }
     finally { setLoading(false) }
   }
 
