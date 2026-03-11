@@ -5,9 +5,35 @@ JobRadar AI - Job Search Engine
 3. Jobicy  — free, no key, remote jobs searched by skill tag
 """
 
-import os, asyncio, hashlib, re
+import os, asyncio, hashlib, re, time
 from typing import List, Optional, Dict
 import httpx
+
+# ── Result cache (skill_hash+location → jobs, expires 6hrs) ──────────────────
+_cache: dict = {}
+CACHE_TTL = 6 * 60 * 60  # 6 hours in seconds
+
+def cache_key(skills, job_titles, location, remote_only):
+    raw = f"{sorted(skills)}|{job_titles[0] if job_titles else ''}|{location}|{remote_only}"
+    return hashlib.md5(raw.encode()).hexdigest()
+
+def get_cached(key):
+    entry = _cache.get(key)
+    if entry and (time.time() - entry['ts']) < CACHE_TTL:
+        age_mins = int((time.time() - entry['ts']) / 60)
+        print(f"[Cache] HIT — {len(entry['jobs'])} jobs, cached {age_mins}min ago")
+        return entry['jobs']
+    return None
+
+def set_cache(key, jobs):
+    _cache[key] = {'jobs': jobs, 'ts': time.time()}
+    # Keep cache size under 200 entries
+    if len(_cache) > 200:
+        oldest = sorted(_cache.keys(), key=lambda k: _cache[k]['ts'])
+        for k in oldest[:50]:
+            del _cache[k]
+    print(f"[Cache] STORED — {len(jobs)} jobs. Cache size: {len(_cache)} entries")
+
 
 ADZUNA_APP_ID  = os.getenv("ADZUNA_APP_ID", "").strip()
 ADZUNA_APP_KEY = os.getenv("ADZUNA_APP_KEY", "").strip()
@@ -84,18 +110,22 @@ def make_job(url, title, company, location, portal, desc,
 def adzuna_country(location: Optional[str]) -> str:
     if not location: return "in"
     l = location.lower()
-    if any(x in l for x in ["india","bangalore","hyderabad","pune","mumbai","delhi","chennai","noida"]): return "in"
-    if any(x in l for x in ["usa","united states","new york","seattle","san francisco","austin"]): return "us"
-    if any(x in l for x in ["uk","london","england"]): return "gb"
-    if any(x in l for x in ["canada","toronto","vancouver"]): return "ca"
-    if any(x in l for x in ["australia","sydney","melbourne"]): return "au"
-    return "in"
+    if "usa" in l or "united states" in l: return "us"
+    if "uk" in l or "united kingdom" in l: return "gb"
+    if "canada" in l: return "ca"
+    if "australia" in l: return "au"
+    if "germany" in l: return "de"
+    return "in"  # default India
 
 
 async def fetch_adzuna(query: str, location: Optional[str]) -> List[Dict]:
     if not (ADZUNA_APP_ID and ADZUNA_APP_KEY):
         return []
     country = adzuna_country(location)
+
+    # location is now clean: "India", "USA", "UK", "Canada", "Australia"
+    location_where = location if location and "remote" not in location.lower() else None
+
     params = {
         "app_id":           ADZUNA_APP_ID,
         "app_key":          ADZUNA_APP_KEY,
@@ -104,8 +134,9 @@ async def fetch_adzuna(query: str, location: Optional[str]) -> List[Dict]:
         "what":             query,
         "content-type":     "application/json",
     }
-    if location and "remote" not in location.lower():
-        params["where"] = location
+    if location_where:
+        params["where"] = location_where
+
     try:
         async with httpx.AsyncClient(timeout=15) as c:
             r = await c.get(
@@ -116,10 +147,27 @@ async def fetch_adzuna(query: str, location: Optional[str]) -> List[Dict]:
     except Exception as e:
         print(f"[Adzuna] Error '{query}': {e}")
         return []
+
     jobs = []
     for item in items:
         url = item.get("redirect_url", "")
         if not url: continue
+
+        job_location = (item.get("location") or {}).get("display_name", "") or location_where or "India"
+
+        # Hard filter: skip jobs from wrong country
+        if location_where:
+            country_keywords = {
+                "in": ["india","bangalore","bengaluru","hyderabad","pune","mumbai","delhi","chennai","noida","gurgaon","kolkata"],
+                "us": ["usa","united states","new york","san francisco","seattle","austin","boston","chicago","remote"],
+                "gb": ["uk","london","england","manchester","birmingham","britain","remote"],
+                "ca": ["canada","toronto","vancouver","montreal","remote"],
+                "au": ["australia","sydney","melbourne","brisbane","remote"],
+            }
+            allowed = country_keywords.get(country, [])
+            if allowed and not any(kw in job_location.lower() for kw in allowed):
+                continue
+
         sm, sx = item.get("salary_min"), item.get("salary_max")
         sal = (f"₹{int(sm/100000):.0f}L–₹{int(sx/100000):.0f}L"
                if sm and sx and country == "in" else
@@ -128,14 +176,14 @@ async def fetch_adzuna(query: str, location: Optional[str]) -> List[Dict]:
             url=url,
             title=item.get("title", ""),
             company=(item.get("company") or {}).get("display_name", ""),
-            location=(item.get("location") or {}).get("display_name", "") or location or "India",
+            location=job_location,
             portal="Adzuna",
             desc=item.get("description", ""),
             salary=sal,
             posted=item.get("created", ""),
         )
         if job: jobs.append(job)
-    print(f"[Adzuna] '{query}' ({country}): {len(jobs)} jobs")
+    print(f"[Adzuna] '{query}' ({country}, where={location_where}): {len(jobs)} jobs")
     return jobs
 
 
@@ -226,6 +274,16 @@ class JobSearchEngine:
 
         print(f"[JobRadar] Searching top skills: {top}")
 
+        # Cache key — defined here so always in scope
+        ck = cache_key(skills, job_titles, location, remote_only)
+        cached = get_cached(ck)
+        if cached:
+            result = cached[:]
+            if portal_filter:
+                result = [j for j in result if portal_filter.lower() in j["portal"].lower()]
+            print(f"[Cache] Returning {len(result)} cached jobs")
+            return result
+
         tasks = []
         # Adzuna — one search per skill (best results)
         for sk in top:
@@ -267,12 +325,25 @@ class JobSearchEngine:
         print(f"[JobRadar] Top match: {top_score}% | Jobs ≥40%: {sum(1 for j in raw if j['match_score'] >= 40)}")
 
         # Filters
+        COUNTRY_KEYWORDS = {
+            "India":     ["india","bangalore","bengaluru","hyderabad","pune","mumbai","delhi","chennai","noida","gurgaon","remote"],
+            "USA":       ["usa","united states","new york","san francisco","seattle","austin","boston","chicago","remote"],
+            "UK":        ["uk","london","england","manchester","birmingham","remote"],
+            "Canada":    ["canada","toronto","vancouver","montreal","remote"],
+            "Australia": ["australia","sydney","melbourne","brisbane","remote"],
+        }
         if remote_only:
             raw = [j for j in raw if "remote" in j["location"].lower()]
+        elif location and location in COUNTRY_KEYWORDS:
+            allowed = COUNTRY_KEYWORDS[location]
+            raw = [j for j in raw if any(kw in j["location"].lower() for kw in allowed)]
         if experience_level:
             raw = [j for j in raw if experience_level.lower() in (j.get("experience_required") or "").lower()]
         if portal_filter:
             raw = [j for j in raw if portal_filter.lower() in j["portal"].lower()]
+
+        # Store in cache for next user with same search
+        set_cache(ck, raw)
 
         print(f"[JobRadar] Returning {len(raw)} jobs\n")
         return raw
