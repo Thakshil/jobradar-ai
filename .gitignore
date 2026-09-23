@@ -1,0 +1,18 @@
+__pycache__/
+*.pyc
+backend/.env
+
+# Frontend
+frontend/node_modules/
+frontend/dist/
+frontend/.env.local
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Load test results (generated — do not commit)
+backend/results/*.csv
+backend/results/*.html
+backend/results/*.json
+backend/.locust_environment
