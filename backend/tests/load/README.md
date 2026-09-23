@@ -16,6 +16,42 @@ Performance and load-testing setup for the **JobRadar AI** FastAPI backend.
 | Python version | 3.12.4 (Anaconda) |
 | Dependency file | `backend/requirements.txt` |
 
+
+## 📊 Measured Performance
+
+JobRadar was load-tested locally using **Locust** with 100 concurrent simulated users.
+
+### 100-User Load Test
+
+**Configuration**
+
+* Concurrent users: **100**
+* Spawn rate: **10 users/sec**
+* Duration: **120 seconds**
+* Environment: **localhost**
+* Total requests: **5,610**
+
+| Metric          |        Result |
+| --------------- | ------------: |
+| Requests        |     **5,610** |
+| Throughput      | **~48 req/s** |
+| Average latency |     **91 ms** |
+| P50 latency     |     **28 ms** |
+| P95 latency     |    **390 ms** |
+| P99 latency     |    **900 ms** |
+| Maximum latency |  **2,071 ms** |
+| Failed requests |         **0** |
+| Failure rate    |     **0.00%** |
+
+### Interpretation
+
+The backend processed **5,610 requests** during the 120-second test with **100 concurrent simulated users**, sustaining approximately **48 requests/sec** with **zero failed requests**.
+
+The test recorded **91 ms average latency** and **390 ms P95 latency**.
+
+> **Note:** These measurements were obtained in a localhost environment using simulated users. They represent observed load-test performance and should not be interpreted as a production capacity guarantee.
+
+
 ### Endpoints Under Test
 
 | Method | Path | Description | Weight |
